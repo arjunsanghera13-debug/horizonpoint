@@ -72,3 +72,17 @@ p {
   transition: transform .15s;
 }
 .back:hover { transform: translateY(-2px) rotate(-1deg); }
+
+.email-link {
+  font-family: 'Luckiest Guy', cursive;
+  font-size: 1.4rem;
+  color: #1c5fa8;
+  text-decoration: none;
+}
+.email-link:hover { color: #ff7bac; }
+
+.email-btn {
+  background: #ffd90f;
+  color: #1c5fa8;
+  margin-right: 12px;
+}
