@@ -33,16 +33,16 @@ controls.maxPolarAngle = Math.PI / 2 - 0.06;
 controls.enablePan = false;
 
 /* ---------- lights ---------- */
-scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+scene.add(new THREE.AmbientLight(0xffffff, 0.78)); // a touch lower so shadows read more
 const sun = new THREE.DirectionalLight(0xfff3c4, 2.2);
-sun.position.set(18, 28, 14);
+sun.position.set(36, 56, 28); // far enough back that the clouds sit inside the shadow frustum
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -45;
 sun.shadow.camera.right = 45;
 sun.shadow.camera.top = 45;
 sun.shadow.camera.bottom = -45;
-sun.shadow.camera.far = 120;
+sun.shadow.camera.far = 170;
 scene.add(sun);
 
 /* ---------- toon material helper ---------- */
@@ -57,6 +57,90 @@ function toon(color) {
   if (!MAT[color]) MAT[color] = new THREE.MeshToonMaterial({ color, gradientMap });
   return MAT[color];
 }
+
+/* ---------- procedural cartoon textures ---------- */
+function canvasTexture(size, drawFn, repeat = 1) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  drawFn(cv.getContext('2d'), size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeat, repeat);
+  return tex;
+}
+
+// speckled grass
+const grassTex = canvasTexture(256, (ctx, s) => {
+  ctx.fillStyle = '#7ec850';
+  ctx.fillRect(0, 0, s, s);
+  for (let i = 0; i < 520; i++) {
+    ctx.fillStyle = Math.random() < 0.5 ? '#74be47' : '#8ad35c';
+    ctx.fillRect(Math.random() * s, Math.random() * s, 2 + Math.random() * 3, 2);
+  }
+  ctx.strokeStyle = '#6ab03e';
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < 90; i++) {
+    const x = Math.random() * s, y = Math.random() * s;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 2, y - 5); ctx.stroke();
+  }
+}, 40);
+const grassMat = new THREE.MeshToonMaterial({ map: grassTex, gradientMap });
+
+// neutral shingle rows — multiplied with each roof colour
+const shingleTex = canvasTexture(256, (ctx, s) => {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, s, s);
+  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+  ctx.lineWidth = 3;
+  const row = 32;
+  for (let y = row; y <= s; y += row) {
+    ctx.beginPath(); ctx.moveTo(0, y - 1); ctx.lineTo(s, y - 1); ctx.stroke();
+  }
+  for (let r = 0; r < s / row; r++) {
+    const off = (r % 2) * row;
+    for (let x = off; x <= s; x += row * 2) {
+      ctx.beginPath(); ctx.moveTo(x, r * row); ctx.lineTo(x, r * row + row); ctx.stroke();
+    }
+  }
+}, 3);
+const roofMats = {};
+function roofMat(color) {
+  if (!roofMats[color]) roofMats[color] = new THREE.MeshToonMaterial({ color, gradientMap, map: shingleTex });
+  return roofMats[color];
+}
+
+// wood grain for plywood
+const grainTex = canvasTexture(256, (ctx, s) => {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, s, s);
+  ctx.strokeStyle = 'rgba(120,70,20,0.18)';
+  ctx.lineWidth = 2;
+  for (let y = 6; y < s; y += 10 + Math.random() * 8) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(s * 0.3, y + 4, s * 0.6, y - 4, s, y + 2);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(120,70,20,0.12)';
+  for (let i = 0; i < 5; i++) {
+    const x = Math.random() * s, y = Math.random() * s;
+    ctx.beginPath(); ctx.ellipse(x, y, 6, 3, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+}, 2);
+const plywoodMat = new THREE.MeshToonMaterial({ color: 0xd9a05b, gradientMap, map: grainTex });
+
+// asphalt speckle
+const asphaltTex = canvasTexture(128, (ctx, s) => {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, s, s);
+  for (let i = 0; i < 260; i++) {
+    const g = 200 + Math.floor(Math.random() * 55);
+    ctx.fillStyle = `rgba(${g},${g},${g},0.55)`;
+    ctx.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+  }
+}, 1);
+asphaltTex.repeat.set(40, 2);
 
 const edgeMat = new THREE.LineBasicMaterial({ color: 0x4a2c12 });
 function box(w, h, d, color, x, y, z, { edges = false, shadow = true, parent = scene } = {}) {
@@ -93,7 +177,7 @@ const C = {
 };
 
 /* ---------- ground ---------- */
-const ground = new THREE.Mesh(new THREE.CircleGeometry(120, 48), toon(C.grass));
+const ground = new THREE.Mesh(new THREE.CircleGeometry(120, 48), grassMat);
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
@@ -149,7 +233,7 @@ house.add(gable2);
 const slopeAng = Math.atan2(2.7, 4.3);          // rise 2.7 over half-depth 4.3
 const slopeLen = Math.hypot(2.7, 4.3) + 0.8;    // + overhang
 function roofPanel(width, cx, zSign, color, thickness = 0.28) {
-  const p = new THREE.Mesh(new THREE.BoxGeometry(width, thickness, slopeLen), toon(color));
+  const p = new THREE.Mesh(new THREE.BoxGeometry(width, thickness, slopeLen), roofMat(color));
   p.rotation.x = zSign * slopeAng;
   p.position.set(cx, 5 + 1.45, zSign * 2.25);
   p.castShadow = true;
@@ -187,7 +271,8 @@ awning.rotation.x = 0.25;
 
 /* ----- construction RIGHT half (x>0) ----- */
 // floor slab
-box(6, 0.25, 8, C.plywood, 3, 0.125, 0, { edges: true, parent: house });
+const slab = box(6, 0.25, 8, C.plywood, 3, 0.125, 0, { edges: true, parent: house });
+slab.material = plywoodMat;
 
 // wall studs
 function stud(x, z, h = 5, t = 0.18) { return box(t, h, t, C.wood, x, h / 2, z, { parent: house }); }
@@ -213,8 +298,10 @@ for (let x = 0.9; x <= 6.1; x += 1.05) {
 }
 
 // one plywood sheet already nailed on + one leaning
-box(1.8, 2.4, 0.1, C.plywood, 1.6, 1.45, 4.0, { edges: true, parent: house });
+const nailedSheet = box(1.8, 2.4, 0.1, C.plywood, 1.6, 1.45, 4.0, { edges: true, parent: house });
+nailedSheet.material = plywoodMat;
 const leanSheet = box(1.7, 2.6, 0.12, C.plywood, 7.6, 1.28, 2.4, { edges: true });
+leanSheet.material = plywoodMat;
 leanSheet.rotation.z = -0.28;
 
 /* ============================================================
@@ -312,8 +399,8 @@ function cone(x, z) {
   scene.add(c);
   box(0.8, 0.07, 0.8, C.orange, x, 0.035, z);
 }
-cone(1.2, 9.2);
-cone(6.8, 8.2);
+cone(-4.6, 9.8);
+cone(6.8, 7.6);
 
 // UNDER CONSTRUCTION sign (canvas texture)
 const signCanvas = document.createElement('canvas');
@@ -342,6 +429,162 @@ const signPanel = new THREE.Mesh(
 signPanel.position.set(0, 2.1, 0);
 signPanel.castShadow = true;
 signGroup.add(signPanel);
+
+/* ============================================================
+   WORKERS — little Simpsons-style builders, animated
+   ============================================================ */
+const workers = [];
+const SKIN = 0xffd90f;
+
+function makeWorker({ shirt = 0xffffff, pants = 0x3a6bc4, hat = 0xff8c1a } = {}) {
+  const g = new THREE.Group();
+
+  const legGeo = new THREE.BoxGeometry(0.16, 0.55, 0.16);
+  const legL = new THREE.Group(), legR = new THREE.Group();
+  for (const [lg, sx] of [[legL, -0.11], [legR, 0.11]]) {
+    const m = new THREE.Mesh(legGeo, toon(pants));
+    m.position.y = -0.275;
+    m.castShadow = true;
+    lg.add(m);
+    lg.position.set(sx, 0.55, 0);
+    g.add(lg);
+  }
+
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.6, 0.26), toon(shirt));
+  torso.position.y = 0.85;
+  torso.castShadow = true;
+  g.add(torso);
+
+  const armGeo = new THREE.BoxGeometry(0.12, 0.5, 0.12);
+  const armL = new THREE.Group(), armR = new THREE.Group();
+  for (const [ag, sx] of [[armL, -0.28], [armR, 0.28]]) {
+    const m = new THREE.Mesh(armGeo, toon(SKIN));
+    m.position.y = -0.25;
+    m.castShadow = true;
+    ag.add(m);
+    ag.position.set(sx, 1.1, 0);
+    g.add(ag);
+  }
+
+  const head = new THREE.Group();
+  const hm = new THREE.Mesh(new THREE.SphereGeometry(0.26, 16, 14), toon(SKIN));
+  hm.castShadow = true;
+  head.add(hm);
+  for (const ex of [-0.09, 0.09]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 10), toon(0xffffff));
+    eye.position.set(ex, 0.05, 0.2);
+    head.add(eye);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 8), toon(0x222222));
+    pupil.position.set(ex, 0.05, 0.27);
+    head.add(pupil);
+  }
+  const hatTop = new THREE.Mesh(new THREE.SphereGeometry(0.24, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), toon(hat));
+  hatTop.position.y = 0.12;
+  hatTop.scale.y = 0.75;
+  head.add(hatTop);
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.05, 14), toon(hat));
+  brim.position.y = 0.1;
+  head.add(brim);
+  head.position.y = 1.42;
+  g.add(head);
+
+  g.scale.setScalar(1.15);
+  scene.add(g);
+  return { g, armL, armR, legL, legR, head };
+}
+
+// 1) hammering on the scaffold, facing the frame
+{
+  const w = makeWorker({ shirt: 0xffffff });
+  w.g.position.set(7.7, 3.31, -0.5);
+  w.g.rotation.y = -Math.PI / 2;
+  const hammer = new THREE.Group();
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.4), toon(C.woodDark));
+  handle.position.z = 0.2;
+  hammer.add(handle);
+  const headH = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.11, 0.11), toon(0x777f88));
+  headH.position.z = 0.4;
+  hammer.add(headH);
+  hammer.position.y = -0.5;
+  w.armR.add(hammer);
+  workers.push({
+    update(t) {
+      w.armR.rotation.x = -1.15 + Math.sin(t * 7) * 0.55;
+      w.head.rotation.x = Math.sin(t * 7) * 0.08;
+    }
+  });
+}
+
+// 2) sawing at the sawhorse
+{
+  const w = makeWorker({ shirt: 0x8fce6e, hat: 0xffd90f });
+  w.g.position.set(3.94, 0, 7.88);
+  w.g.rotation.y = Math.PI - 0.5;
+  const saw = new THREE.Group();
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.16, 0.5), toon(0xb8c4cc));
+  blade.position.set(0, -0.05, 0.3);
+  saw.add(blade);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.16, 0.12), toon(C.woodDark));
+  grip.position.set(0, 0.02, 0.05);
+  saw.add(grip);
+  saw.position.y = -0.5;
+  w.armR.add(saw);
+  workers.push({
+    update(t) {
+      w.armR.rotation.x = -0.95 + Math.sin(t * 5) * 0.45;
+      w.g.position.z = 7.88 + Math.sin(t * 5) * 0.05;
+    }
+  });
+}
+
+// 3) carrying a plank back and forth across the yard
+{
+  const w = makeWorker({ shirt: 0x6ec3e8 });
+  const plank = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 2.3), toon(C.wood));
+  plank.position.set(0.3, 1.62, 0);
+  plank.castShadow = true;
+  w.g.add(plank);
+  w.armR.rotation.x = -2.5; // holding the plank on the shoulder
+  workers.push({
+    update(t) {
+      const p = Math.sin(t * 0.45);
+      const dir = Math.cos(t * 0.45);
+      w.g.position.set(5 + 4 * p, Math.abs(Math.sin(t * 6)) * 0.06, 9.3);
+      w.g.rotation.y = dir >= 0 ? Math.PI / 2 : -Math.PI / 2;
+      const swing = Math.sin(t * 6) * 0.55;
+      w.legL.rotation.x = swing;
+      w.legR.rotation.x = -swing;
+      w.armL.rotation.x = -swing * 0.7;
+    }
+  });
+}
+
+// 4) painting the finished wall, next to the door
+{
+  const w = makeWorker({ shirt: 0xf5f0e6, pants: 0xf5f0e6, hat: 0xffffff });
+  w.g.position.set(-3.05, 0, 4.85);
+  w.g.rotation.y = Math.PI;
+  const roller = new THREE.Group();
+  const stick = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.32, 0.05), toon(0x777f88));
+  stick.position.y = -0.1;
+  roller.add(stick);
+  const rollerHead = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.3, 10), toon(C.pink));
+  rollerHead.rotation.z = Math.PI / 2;
+  rollerHead.position.y = -0.3;
+  roller.add(rollerHead);
+  roller.position.y = -0.55;
+  roller.rotation.x = Math.PI;
+  w.armR.add(roller);
+  // the patch of fresh pink paint he's responsible for
+  const patch = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 1.3), toon(C.pink));
+  patch.position.set(-3.05, 1.6, 4.06);
+  scene.add(patch);
+  workers.push({
+    update(t) {
+      w.armR.rotation.x = -1.7 + Math.sin(t * 2.4) * 0.45;
+    }
+  });
+}
 
 /* ============================================================
    WHITE PICKET FENCE — front z=12 (gate at x=-1.8), sides x=±15
@@ -408,7 +651,18 @@ for (const y of [0.35, 0.78]) {
 /* ============================================================
    SKY — Simpsons clouds + a couple of bushes/trees
    ============================================================ */
-const cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+// soft 4-step shading so clouds get pale grey undersides instead of flat white
+const cloudSteps = new Uint8Array([208, 230, 246, 255]);
+const cloudGrad = new THREE.DataTexture(cloudSteps, cloudSteps.length, 1, THREE.RedFormat);
+cloudGrad.minFilter = THREE.NearestFilter;
+cloudGrad.magFilter = THREE.NearestFilter;
+cloudGrad.needsUpdate = true;
+const cloudMat = new THREE.MeshToonMaterial({
+  color: 0xffffff,
+  gradientMap: cloudGrad,
+  emissive: 0xdfeef7,          // lifts sunlit sides back to pure white, undersides stay soft grey-blue
+  emissiveIntensity: 0.35,
+});
 const clouds = [];
 function cloud(x, y, z, s = 1) {
   const g = new THREE.Group();
@@ -420,6 +674,7 @@ function cloud(x, y, z, s = 1) {
     const b = new THREE.Mesh(new THREE.SphereGeometry(br, 18, 14), cloudMat);
     b.position.set(bx, by, bz);
     b.scale.y = 0.72;
+    b.castShadow = true;
     g.add(b);
   }
   g.position.set(x, y, z);
@@ -464,6 +719,7 @@ function cloudLink(text, href, x, y, z, s = 1.5) {
     const b = new THREE.Mesh(new THREE.SphereGeometry(br, 18, 14), cloudMat);
     b.position.set(bx, by, bz);
     b.scale.y = 0.72;
+    b.castShadow = true;
     g.add(b);
   }
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture(text), transparent: true }));
@@ -541,7 +797,7 @@ tree(-11.5, -5.5);
    THE NEIGHBOURHOOD — street + finished houses all around
    ============================================================ */
 // road along the front (z 14..20) with sidewalks and dashes
-const road = new THREE.Mesh(new THREE.PlaneGeometry(130, 6), toon(0x82858f));
+const road = new THREE.Mesh(new THREE.PlaneGeometry(130, 6), new THREE.MeshToonMaterial({ color: 0x82858f, gradientMap, map: asphaltTex }));
 road.rotation.x = -Math.PI / 2;
 road.position.set(0, 0.025, 17);
 road.receiveShadow = true;
@@ -587,7 +843,7 @@ function finishedHouse({ wall, roof, door = C.door }, x, z, rotY = 0, s = 1) {
   const ang = Math.atan2(2.3, D / 2);
   const len = Math.hypot(2.3, D / 2) + 0.8;
   for (const zs of [1, -1]) {
-    const p = new THREE.Mesh(new THREE.BoxGeometry(W + 1, 0.26, len), toon(roof));
+    const p = new THREE.Mesh(new THREE.BoxGeometry(W + 1, 0.26, len), roofMat(roof));
     p.rotation.x = zs * ang;
     p.position.set(0, H + 1.25, zs * (D / 4 - 0.05));
     p.castShadow = true;
@@ -795,6 +1051,7 @@ function animate() {
     c.position.x += dt * (0.4 + i * 0.12);
     if (c.position.x > 60) c.position.x = -60;
   }
+  for (let i = 0; i < workers.length; i++) workers[i].update(t);
   // link clouds: gentle bob + keep label on the camera-facing side
   for (let i = 0; i < linkClouds.length; i++) {
     const g = linkClouds[i];
